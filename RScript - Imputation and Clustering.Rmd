@@ -1,0 +1,343 @@
+---
+title: "Thesis"
+author: "Bas Rongen"
+date: "2023-04-09"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Clear the kernel
+rm(list = ls())
+
+```
+
+```{r}
+
+#Loading in packages
+library(openxlsx)
+library("NbClust")
+library(dplyr)
+library(ggplot2)
+library(factoextra)
+library(kml3d)
+library(fpc)
+library(mice)
+
+#Reading the data and setting workspace
+set.seed(123)
+
+library(readxl)
+symptoms_data <- read_excel("symptoms_data.xlsx")
+View(symptoms_data)
+
+Data_scaled<- symptoms_data
+Data_scaled[,-1] <- scale(symptoms_data[,-1])
+
+```
+
+```{r}
+output <- mice(data = symptoms_data, m = 5, maxit=5, method = )
+```
+
+```{r}
+#Shows 5 different options of MICE dataframes; shows how much change MICE makes.
+summary(symptoms_data$Quality.of.Life3)
+summary(output$imp$Quality.of.Life3)
+```
+
+```{r}
+symptoms_data_imputed <- complete(output, 2) #Number indicates which split of MICE we pick. 
+#View(symptoms_data_imputed)
+```
+
+
+```{r}
+#Elbow plotting for imputed data
+df_matrix <- na.omit(data.matrix(scale(symptoms_data_imputed[,-1])))
+
+wssplot <- function(df_matrix, nc=20, seed=123){
+  wss <- (nrow(df_matrix)-1)*sum(apply(df_matrix,2,var))
+  for (i in 2:nc){
+    set.seed(seed)
+    wss[i] <- sum(kmeans(df_matrix,centers=i)$withinss)}
+  plot(1:nc, wss, type="b", xlab="Number of clusters", ylab="Within groups sum of squares")}
+
+```
+
+
+```{r}
+#Using silhouette metric to find optimal clusters (results in 2 for full data set)
+silh_method <- symptoms_data_imputed[,c(seq(1,71, 5))]
+
+#Ask Katrijn, is it OK to just take a few variables here? 
+
+pamk.best2 <- pamk(silh_method)
+cat("number of clusters estimated by optimum average silhouette width:", pamk.best2$nc, "\n")
+plot(pam(silh_method, pamk.best2$nc))
+```
+
+
+```{r}
+#Finding all statistics for optimal amount of clusters
+res.nbclust <- NbClust(data = df_matrix[, c(seq(16,25,5), seq(31,70,5) )], distance = "euclidean", min.nc = 2, max.nc = 9, method = "complete", index = "all")
+
+```
+
+```{r}
+#More graphs to determine optimal amount of clusters
+#Only symptoms
+#Symptoms + Quality of Life & Role Functioning
+fviz_nbclust(df_matrix[, c(seq(16,25,5), seq(31,70,5) )], kmeans, method = "gap_stat")
+fviz_nbclust(df_matrix[, c(seq(16,25,5), seq(31,70,5) )], kmeans, method = "wss")
+fviz_nbclust(df_matrix[, c(seq(16,25,5), seq(31,70,5) )], kmeans, method = "silhouette")
+
+#Everything all waves
+fviz_nbclust(df_matrix[, c(seq(16,25,1), seq(31,70,1) )], kmeans, method = "gap_stat")
+fviz_nbclust(df_matrix[, c(seq(16,25,1), seq(31,70,1) )], kmeans, method = "wss")
+fviz_nbclust(df_matrix[, c(seq(16,25,1), seq(31,70,1) )], kmeans, method = "silhouette")
+```
+
+```{r}
+#Clustering K-means for an indication of how it looks 
+km.out <- kmeans(df_matrix[, c(seq(16,25,5), seq(31,70,5) )], centers = 3, nstart=100)
+#print(km.out)
+
+km.clusters <- km.out$cluster
+fviz_cluster(list(data=df_matrix[, c(seq(16,25,5), seq(31,70,5) )], cluster = km.clusters)) #Data_non_imputed$clusters
+```
+
+--------------------------------------------------------------------------------
+
+KML3D Part:
+- Reshaping the data
+```{r}
+#Reshaping the data for kml3d format
+Data_scaled1 <-data.frame(Data_scaled)
+
+prepare_data <- function(data){
+  x <- list(Emotional.functioning = 17:21,
+            Cognitive.functioning = 22:26,  
+            Fatigue = 32:36, Nausea.vomiting = 37:41,Pain = 42:46, 
+            Dsypnea = 47:51, Sleep.disturbance = 52:56, Appetite.Loss = 57:61,
+            Constipation = 62:66, Diarrhea = 67:71
+)
+  kml3d_data <- cld3d(data,timeInData=x) 
+  return(kml3d_data)
+}
+
+prepared_data <- prepare_data(Data_scaled1)
+
+```
+
+Applying KML3d
+
+```{r}
+# 1. Performing kml3d 
+nr_clusters <- 3:8
+
+# 2. Defining settings
+option1 <- parKml3d(distanceName = "euclidean3d", imputationMethod = "copyMean.locf")
+
+kml3d(prepared_data, nbClusters = nr_clusters, parAlgo = option1) #fill in parAlgo
+
+# 3. Choosing the partition
+X11()
+windows()
+try(choice(prepared_data))
+par(mar = c(1, 1, 1, 1))
+plot(prepared_data,nr_clusters,parTraj=parTRAJ(col="clusters"))
+dev.off()
+
+# 4. Visualizing in 3D
+#plotMeans3d(prepared_data, nr_clusters)
+Data_scaled$clusters <- getClusters(prepared_data, 3) #Fill in # of clusters
+symptoms_data_imputed$clusters <- getClusters(prepared_data, 3)
+
+```
+
+```{r}
+#Extracting this data back to python
+#write.csv(Symptoms.data_classes, "data_scaled_withClusters.csv")
+write.csv(symptoms_data_imputed, "data_imputed_withClusters.csv")
+```
+
+Plotting findings & Showing symptoms (also done in Python)
+```{r}
+#Plotting findings 
+#data_proxy <- Data_non_imputed[,-c(1, ncol(Data_non_imputed))]
+#data_proxy[is.na(data_proxy)] <- 0 #Missing values replaced with 0, only way to make this plotting work
+
+fviz_cluster(list(data=symptoms_data_imputed[, c(seq(16,25,5), seq(31,70,5) )], cluster = symptoms_data_imputed$clusters))
+```
+
+```{r}
+#Further visualisation of obtained clusters: (check implementation file Stoitsas)
+graph1<-qplot(clusters, Quality.of.Life1, data = symptoms_data_imputed,geom= "boxplot")
+print(graph1)
+
+```
+
+
+---------------------------------------------------------
+
+
+```{r}
+#Checking obtained cluster stability with river plots
+#1: Take a random 90% of the data:
+Take90Percent <- function(data){
+  n <- nrow(data) # get number of rows in data frame
+  n_90 <- round(n * 0.9) # calculate number of rows for 90% subset 
+  index <- sample(n, n_90) # randomly sample index numbers for 90% subset
+  new_dataframe <- data[index, ] # subset data frame using sampled index numbers
+  return(new_dataframe)
+  }
+
+
+#2: Turn it into kml3d applicable object (specify which symptoms to filter on)
+prepare_data <- function(data){
+  x <- list(Fatigue = 34:37, Nausea_vomitting = 38:41, Pain = 42:45, Dyspnea = 46:49, Sleep_disturbance = 50:53,
+          Appetite_loss = 54:57, Constipation = 58:61, Diarrhea = 62:65)
+  kml3d_data <- cld3d(data,timeInData=x) 
+  return(kml3d_data)
+}
+
+#3: Apply kml3d (function)
+apply_kml3d <- function(nr_clusters, input_data, output_data){
+  
+  print("hi")
+  kml3d(input_data, nbClusters = nr_clusters, parAlgo = option1)
+  print("hi2")
+  output_data$clusters <- getClusters(input_data, nr_clusters)
+  print("hi3")
+  return(output_data)
+}
+
+```
+
+
+```{r}
+temp_data2 = 0
+customfunction <- function(iterations, nr_clusters){
+  result <- data.frame(Data_scaled$participant.id)
+  colnames(result)[1] <- "ID"
+  
+  for (i in 1:iterations){
+    #1
+    temp_data <- Take90Percent(Data_scaled)
+
+    #2
+    temp_data2 <- prepare_data(temp_data)
+    
+    #3:
+    kml3d(temp_data2, nbClusters = nr_clusters, parAlgo = option1) #fill in nr.clusters
+    
+    kml3dsettings <- parKml3d(distanceName = "euclidean3d", imputationMethod = "copyMean.locf")#Change if necc. 
+    
+    temp_data$Cluster_label <- getClusters(temp_data2, nr_clusters)
+    temp_data <- temp_data[,c(1, ncol(temp_data))]
+    rownames(temp_data) <- temp_data[,1]
+    colnames(temp_data)[1] <- "ID"
+    
+    result <- merge(result, temp_data, by="ID", all.x=TRUE)
+    wavename <- paste("Wave ", i)
+    colnames(result)[1+i] <- wavename
+    
+  }
+  
+  result$ID <- as.numeric(result$ID)
+  result <- result[order(result$ID),]
+  
+  return(result)
+}
+
+stability_test_3clusters <- customfunction(iterations = 20, nr_clusters = 3)
+stability_test_4clusters <- customfunction(iterations = 20, nr_clusters = 4)
+stability_test_5clusters <- customfunction(iterations = 20, nr_clusters = 5)
+
+
+
+```
+```{r}
+#write.xlsx(stability_test_3clusters, "stability_test_3clusters.xlsx")
+#write.xlsx(stability_test_4clusters, "stability_test_4clusters.xlsx")
+write.xlsx(stability_test_5clusters, "stability_test_5clusters.xlsx")
+```
+
+Checking differences in results obtained when using various imputation methods:
+```{r}
+prepared_data_copymean.locf <- prepared_data
+prepared_data_trajHotDeck <- prepared_data
+prepared_data_linearInterpol.global <- prepared_data
+
+symptoms_data_imputedcopymean.locf <- symptoms_data_imputed
+symptoms_data_imputedtrajHotDeck <- symptoms_data_imputed
+symptoms_data_imputedlinearInterpol.global <- symptoms_data_imputed
+```
+
+```{r}
+nr_clusters <- 3:8
+option1 <- parKml3d(distanceName = "euclidean3d", imputationMethod = "copyMean.locf")
+kml3d(prepared_data_copymean.locf, nbClusters = nr_clusters, parAlgo = option1) #fill in parAlgo
+
+# 3. Choosing the partition
+X11()
+windows()
+try(choice(prepared_data_copymean.locf))
+par(mar = c(1, 1, 1, 1))
+plot(prepared_data_copymean.locf,nr_clusters,parTraj=parTRAJ(col="clusters"))
+dev.off()
+
+# 4. Visualizing in 3D
+Data_scaled$clusters <- getClusters(prepared_data_copymean.locf, 3) #Fill in # of clusters
+symptoms_data_imputedcopymean.locf$clusters <- getClusters(prepared_data_copymean.locf, 3)
+
+```
+
+```{r}
+nr_clusters <- 3:8
+option1 <- parKml3d(distanceName = "euclidean3d", imputationMethod = "trajHotDeck")
+kml3d(prepared_data_trajHotDeck, nbClusters = nr_clusters, parAlgo = option1) #fill in parAlgo
+
+## 3. Choosing the partition
+#X11()
+#windows()
+#try(choice(prepared_data_trajHotDeck))
+#par(mar = c(1, 1, 1, 1))
+#plot(prepared_data_trajHotDeck,nr_clusters,parTraj=parTRAJ(col="clusters"))
+#dev.off()
+
+# 4. Visualizing in 3D
+Data_scaled$clusters <- getClusters(prepared_data_trajHotDeck, 3) #Fill in # of clusters
+symptoms_data_imputedtrajHotDeck$clusters <- getClusters(prepared_data_trajHotDeck, 3)
+
+```
+
+```{r}
+nr_clusters <- 3:8
+option1 <- parKml3d(distanceName = "euclidean3d", imputationMethod = "linearInterpol.local")
+kml3d(prepared_data_linearInterpol.global, nbClusters = nr_clusters, parAlgo = option1) #fill in parAlgo
+
+# 3. Choosing the partition
+X11()
+windows()
+try(choice(prepared_data_linearInterpol.global))
+par(mar = c(1, 1, 1, 1))
+plot(prepared_data_linearInterpol.global,nr_clusters,parTraj=parTRAJ(col="clusters"))
+dev.off()
+
+# 4. Visualizing in 3D
+Data_scaled$clusters <- getClusters(prepared_data_linearInterpol.global, 3) #Fill in # of clusters
+symptoms_data_imputedlinearInterpol.global$clusters <- getClusters(prepared_data_linearInterpol.global, 3)
+
+```
+
+```{r}
+table(symptoms_data_imputedcopymean.locf$clusters)
+table(symptoms_data_imputedtrajHotDeck$clusters)
+table(symptoms_data_imputedlinearInterpol.global$clusters)
+```
+
